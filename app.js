@@ -2,7 +2,33 @@
 const $=id=>document.getElementById(id), clean=x=>x==null?'':String(x).trim(), valid=x=>!!clean(x)&&!['null','none','nan','n/a','...','not specified','-','—'].includes(clean(x).toLowerCase());
 const fields={session:'Session',faculty:'Faculty',department:'Department',activity:'Standardized Activity Type',partner:'Target Partner / Institution',submission:'Submission Ref'};
 let all=[],roster=[];const charts={};let currentPdfURL=null,currentPdfBlob=null;
-function setSourceStatus(state,count){const card=$('sourceCard'),cardText=$('sourceCardText'),chip=$('sourceChip'),chipText=$('sourceChipText');if(!card||!chip)return;card.dataset.state=state;chip.dataset.state=state;const message=state==='connected'?`Connected · ${count.toLocaleString()} records`:state==='loading'?'Connecting to Excel…':'Connection unavailable';cardText.textContent=message;chipText.textContent=state==='connected'?'Connected workbook':state==='loading'?'Connecting workbook':'Excel unavailable';}
+function setSourceStatus(state,count){const card=$('sourceCard'),cardText=$('sourceCardText'),chip=$('sourceChip'),chipText=$('sourceChipText');if(!card||!chip)return;card.dataset.state=state;chip.dataset.state=state;const value=Number(count)||0;cardText.textContent=state==='connected'?`Connected · ${value.toLocaleString()} records`:state==='fallback'?`Snapshot · ${value.toLocaleString()} records`:state==='loading'?'Loading data…':'Data unavailable';chipText.textContent=state==='connected'?'Connected workbook':state==='fallback'?'Saved data snapshot':state==='loading'?'Loading data':'Data unavailable';}
+// Load the small, published JSON snapshot first on EVERY device. XLSX inflation is optional.
+// Keep a release token to avoid an older iOS WebKit cache returning mismatched files.
+const DATA_RELEASE='20261016-json-first-2';
+async function readSnapshot(){
+ const [dr,rr]=await Promise.all([
+  fetch('./data.json?v='+DATA_RELEASE,{cache:'no-store'}),
+  fetch('./submission-roster.json?v='+DATA_RELEASE,{cache:'no-store'})
+ ]);
+ if(!dr.ok||!rr.ok)throw Error('Published JSON snapshot is missing (HTTP '+dr.status+'/'+rr.status+')');
+ const activities=await dr.json(),roster=await rr.json();
+ if(!Array.isArray(activities)||!Array.isArray(roster)||!activities.length||!roster.length)throw Error('Published dashboard snapshot is empty or invalid');
+ return {activities,roster,source:'fallback'};
+}
+async function readWorkbookBounded(){
+ if(!window.UOLExcel||typeof window.UOLExcel.read!=='function')throw Error('Optional Excel reader is unavailable');
+ let timer;
+ try{return {...await Promise.race([window.UOLExcel.read(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Excel reader timed out')),4500)})]),source:'connected'};}
+ finally{clearTimeout(timer)}
+}
+async function loadDashboardData(forceWorkbook=false){
+ if(!forceWorkbook)return readSnapshot();
+ try{return await readWorkbookBounded()}catch(error){console.warn('Excel refresh failed; restoring published JSON:',error);return readSnapshot()}
+}
+
+function sourceDescription(source,activities,roster){return source==='connected'?`Excel connected · ${activities.length} cleaned plans · ${roster.length} submission forms. Save workbook edits, then select Reload Excel.`:`Published data loaded · ${activities.length} cleaned plans · ${roster.length} submission forms. The Excel workbook is optional; republish the two JSON files when changing the source workbook.`;}
+
 const unique=xs=>[...new Set(xs.filter(valid))].sort((a,b)=>String(a).localeCompare(String(b)));
 const group=(xs,key)=>{let m=new Map();xs.forEach(r=>{let v=clean(r[key]);if(valid(v))m.set(v,(m.get(v)||0)+1)});return [...m].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]))};
 function normalizedSession(row){return `${clean(row.Session)} ${clean(row.Year)}`.trim()}
@@ -62,5 +88,6 @@ function showDetails(label,records){$('detailModalTitle').textContent=label;$('d
 function closeDetails(){$('detailModal').hidden=true;document.body.style.overflow='';}
 $('reportClose').onclick=closeReport;$('reportDownload').onclick=savePdf;$('detailClose').onclick=closeDetails;$('reportModal').addEventListener('click',e=>{if(e.target===$('reportModal'))closeReport()});$('detailModal').addEventListener('click',e=>{if(e.target===$('detailModal'))closeDetails()});document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(!$('detailModal').hidden)closeDetails();else if(!$('reportModal').hidden)closeReport()}});
 
-try{const loaded=await window.UOLExcel.read();all=loaded.activities;roster=loaded.roster;setSourceStatus('connected',all.length);$('excelStatus').textContent=`Excel connected · ${all.length} cleaned plans · ${roster.length} submission forms. Save workbook edits, then select Reload Excel.`;Object.keys(fields).forEach(key=>{$(key).add(new Option('All','All'));$(key).addEventListener('change',refresh)});$('search').addEventListener('input',refresh);$('reloadExcel').onclick=async()=>{const btn=$('reloadExcel');btn.disabled=true;btn.textContent='Reloading…';setSourceStatus('loading');try{const next=await window.UOLExcel.read();all=next.activities;roster=next.roster;setSourceStatus('connected',all.length);Object.keys(fields).forEach(k=>$(k).value='All');$('search').value='';refresh();$('excelStatus').textContent=`Excel connected · ${all.length} cleaned plans · ${roster.length} submission forms. Last reload: ${new Date().toLocaleTimeString()}.`;}catch(e){console.error(e);setSourceStatus('connected',all.length);alert('Excel reload failed: '+e.message+' The previous dashboard data has been kept.')}finally{btn.disabled=false;btn.textContent='⟳ Reload Excel'}};$('reset').onclick=()=>{Object.keys(fields).forEach(k=>$(k).value='All');$('search').value='';refresh()};$('csv').onclick=csv;$('print').onclick=downloadPdf;$('navToggle').onclick=()=>{const nav=$('navLinks'),open=nav.classList.toggle('open');$('navToggle').setAttribute('aria-expanded',String(open))};document.querySelectorAll('#navLinks a').forEach(a=>a.onclick=()=>{$('navLinks').classList.remove('open');$('navToggle').setAttribute('aria-expanded','false')});refresh()}catch(e){console.error(e);setSourceStatus('error');document.querySelector('.notice').textContent=`Excel connection error: ${e.message}. Run START_DASHBOARD.bat (or a local web server), and check the Excel workbook sheets.`}
+try{const loaded=await loadDashboardData();all=loaded.activities;roster=loaded.roster;let currentSource=loaded.source;setSourceStatus(currentSource,all.length);$('excelStatus').textContent=sourceDescription(currentSource,all,roster);Object.keys(fields).forEach(key=>{$(key).add(new Option('All','All'));$(key).addEventListener('change',refresh)});$('search').addEventListener('input',refresh);$('reloadExcel').onclick=async()=>{const btn=$('reloadExcel');btn.disabled=true;btn.textContent='Reloading…';setSourceStatus('loading');try{const next=await loadDashboardData(true);all=next.activities;roster=next.roster;currentSource=next.source;setSourceStatus(currentSource,all.length);Object.keys(fields).forEach(k=>$(k).value='All');$('search').value='';refresh();$('excelStatus').textContent=sourceDescription(currentSource,all,roster);}catch(e){console.error(e);setSourceStatus(currentSource,all.length);alert('Reload failed: '+e.message+' The previously loaded dashboard data has been kept.')}finally{btn.disabled=false;btn.textContent='⟳ Reload Excel'}};$('reset').onclick=()=>{Object.keys(fields).forEach(k=>$(k).value='All');$('search').value='';refresh()};$('csv').onclick=csv;$('print').onclick=downloadPdf;$('navToggle').onclick=()=>{const nav=$('navLinks'),open=nav.classList.toggle('open');$('navToggle').setAttribute('aria-expanded',String(open))};document.querySelectorAll('#navLinks a').forEach(a=>a.onclick=()=>{$('navLinks').classList.remove('open');$('navToggle').setAttribute('aria-expanded','false')});refresh()}catch(e){console.error(e);setSourceStatus('error');document.querySelector('.notice').textContent=`Data loading error: ${e.message}. Check that the complete dashboard folder, including the workbook and JSON snapshot, has been uploaded to the website.`}
+
 })();

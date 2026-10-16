@@ -12,3 +12,5 @@
 .sidebar-status[data-state=error] .source-dot,.source-chip[data-state=error] .source-dot{background:#cf5050}
 @media(max-width:850px){.sidebar-status{display:none}.toolbar-status{width:100%}.source-chip,.report-chip{flex:1;justify-content:center}}
 @media(max-width:440px){.source-chip,.report-chip{font-size:10px;padding:9px}}
+
+.sidebar-status[data-state=fallback]{background:#fff8e9;border-color:#f2dfb5}.sidebar-status[data-state=fallback] strong{color:#795513}.sidebar-status[data-state=fallback] .source-dot,.source-chip[data-state=fallback] .source-dot{background:#d39a29}.source-chip[data-state=fallback]{background:#fff8e9;border-color:#f2dfb5;color:#795513}
